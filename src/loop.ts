@@ -84,9 +84,11 @@ async function planAngles(topic: string, config: ResearchConfig, deps: ResearchD
           content:
             "You are a research planner. Decompose the user's topic into distinct, non-overlapping angles " +
             "worth investigating — typically the underlying fundamentals, the main alternatives/comparisons, " +
-            "the biggest concerns or risks, and notable prior art. Return each angle as a precise question.",
+            "the biggest concerns or risks, and notable prior art. Return each angle as a precise, specific " +
+            "sub-question. Never restate the topic verbatim, and never return a single angle that merely " +
+            "rephrases the whole topic — produce several genuinely different sub-questions.",
         },
-        { role: "user", content: `Topic: ${topic}\n\nReturn at most ${config.angles} angles.` },
+        { role: "user", content: `Topic: ${topic}\n\nReturn ${config.angles} distinct sub-questions (at most ${config.angles}).` },
       ],
       ANGLES_SCHEMA,
       { signal: deps.signal, schemaName: "angles" },
@@ -163,7 +165,8 @@ async function writeSection(topic: string, findings: AngleFindings, deps: Resear
         content:
           "Write a concise, neutral section that answers the question using ONLY the provided claims. Cite every " +
           "statement with its [n] marker(s). Do not invent facts or citations. Where the evidence is thin or the " +
-          "sources conflict, say so explicitly.",
+          "sources conflict, say so explicitly. Do NOT add a Sources, References, or bibliography list — that is " +
+          "appended separately. Do not repeat the question as a heading.",
       },
       { role: "user", content: `Topic: ${topic}\nQuestion: ${findings.question}\n\nClaims:\n${claims}` },
     ],
@@ -232,14 +235,19 @@ export async function research(
 
   // Section-aware synthesis: write + stream one section per angle, then the sources.
   deps.emit.progress(80, "Writing report…");
-  const header = `# Research: ${topic}\n\n`;
+  // The incoming topic can carry a planner-expanded restatement plus the original goal;
+  // use the first non-empty line as a clean H1 title.
+  const title = topic.split("\n").map((s) => s.trim()).find((s) => s.length > 0) ?? topic;
+  const header = `# Research: ${title}\n\n`;
   let report = header;
   deps.emit.delta(header);
 
+  const single = findings.length === 1;
   for (const f of findings) {
     throwIfAborted(deps.signal);
     const section = await writeSection(topic, f, deps);
-    const block = `## ${f.question}\n\n${section}\n\n`;
+    // With a single angle the per-angle heading just restates the title, so omit it.
+    const block = single ? `${section}\n\n` : `## ${f.question}\n\n${section}\n\n`;
     report += block;
     deps.emit.delta(block);
   }
