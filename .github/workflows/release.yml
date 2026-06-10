@@ -1,0 +1,27 @@
+name: release
+
+# Publishes to npm when a GitHub Release is published, via tokenless OIDC trusted
+# publishing. Configure the trusted publisher for @agentcompose/research-agent on
+# npmjs.com once (org: agentcompose, repo: research-agent, workflow: release.yml).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # required for provenance attestation
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+      - run: npm publish --access public --provenance
