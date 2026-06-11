@@ -79,7 +79,7 @@ export function makeResearchAgent(opts: ResearchAgentOptions = {}): AgentDefinit
       type: "boolean",
       default: false,
       description:
-        "Ask one scoping question via input-required before researching. Works standalone; nested HITL through a composing engine is not yet propagated.",
+        "Ask one scoping question via input-required before researching. Works standalone and through a composing engine (the engine escalates it to its controller / a human).",
     },
   };
   if (!opts.model) {
