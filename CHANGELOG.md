@@ -23,6 +23,15 @@ First release: a configurable, spec-compliant research worker (SDK-only).
 - **Optional HITL clarification** via the spec's `input-required` state.
 - Exports of the loop, model client, and search ports for embedding and testing.
 
+### Fixed
+- **Planner no longer collapses to a single angle on gateways that ignore
+  `json_schema`.** Some OpenAI-compatible gateways (e.g. Gemini via LiteLLM) answer
+  open-ended, list-style prompts in prose despite a strict `json_schema` response
+  format, which made the structured `json()` call unparseable and silently fell back
+  to one angle (the topic restated). `json()` now does a one-shot **reformat retry**
+  with a forceful JSON-only instruction and the schema inline, recovering the full
+  set of angles. Verified live against `gemini-3.1-flash-lite` / `gemini-3-flash`.
+
 ### Known limitations
 - Angles are investigated **sequentially**; parallel fan-out is future work.
 - `clarify` surfaces `input-required` that works standalone but is not yet propagated

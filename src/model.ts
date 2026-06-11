@@ -97,19 +97,36 @@ export function openAIModel(opts: OpenAIModelOptions): ModelClient {
       return call({ model: opts.model, messages, temperature: o.temperature ?? 0.3 }, o.signal);
     },
     async json<T>(messages: ChatMessage[], schema: object, o: ChatOptions & { schemaName?: string } = {}) {
-      const content = await call(
-        {
-          model: opts.model,
-          messages,
-          temperature: o.temperature ?? 0,
-          response_format: {
-            type: "json_schema",
-            json_schema: { name: o.schemaName ?? "result", schema, strict: true },
-          },
+      const body = {
+        model: opts.model,
+        messages,
+        temperature: o.temperature ?? 0,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: o.schemaName ?? "result", schema, strict: true },
         },
-        o.signal,
-      );
-      return parseJsonLoose<T>(content);
+      };
+      const first = await call(body, o.signal);
+      try {
+        return parseJsonLoose<T>(first);
+      } catch {
+        // Some gateways/models ignore `json_schema` for open-ended, list-style prompts
+        // and answer in prose (e.g. a markdown numbered list). Retry once with a
+        // forceful, prompt-level JSON-only instruction and the schema inline — which
+        // these models honor reliably — instead of collapsing to a degraded fallback.
+        const reformat: ChatMessage[] = [
+          ...messages,
+          {
+            role: "user",
+            content:
+              "Output ONLY a single JSON object that conforms exactly to this JSON Schema. " +
+              "No prose, no markdown, no code fences, no numbering.\n\nJSON Schema:\n" +
+              JSON.stringify(schema),
+          },
+        ];
+        const second = await call({ model: opts.model, messages: reformat, temperature: 0 }, o.signal);
+        return parseJsonLoose<T>(second);
+      }
     },
   };
 }
