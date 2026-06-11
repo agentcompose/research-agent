@@ -4,10 +4,20 @@
   "description": "A configurable, spec-compliant research worker for AgentCompose: an adaptive plan → search → read → reflect → synthesize loop over a pluggable search backend, producing a cited report.",
   "license": "Apache-2.0",
   "homepage": "https://agentcompose.dev",
-  "repository": { "type": "git", "url": "git+https://github.com/agentcompose/research-agent.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentcompose/research-agent.git"
+  },
   "type": "module",
-  "engines": { "node": ">=18.19" },
-  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "engines": {
+    "node": ">=18.19"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -24,7 +34,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agentcompose/sdk": "^0.1.1"
+    "@agentcompose/sdk": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

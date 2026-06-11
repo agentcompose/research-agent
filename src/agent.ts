@@ -161,6 +161,7 @@ export function makeResearchAgent(opts: ResearchAgentOptions = {}): AgentDefinit
       const emit: ResearchEmitter = {
         progress: (percent, message) => ctx.progress(percent, message),
         delta: (text) => ctx.message({ kind: "text", text }),
+        span: (opts, fn) => ctx.trace.span(opts, fn),
       };
 
       const result = await research(topic, config, { model, search, emit, signal: ctx.signal });

@@ -7,7 +7,7 @@
 // testable offline and the backends are swappable.
 import type { ModelClient } from "./model.ts";
 import type { SearchProvider } from "./search/provider.ts";
-import type { Angle, AngleFindings, Citation, Note, ResearchConfig, ResearchEmitter, ResearchResult } from "./types.ts";
+import type { Angle, AngleFindings, Citation, Note, ResearchConfig, ResearchEmitter, ResearchResult, ResearchSpan } from "./types.ts";
 
 export interface ResearchDeps {
   model: ModelClient;
@@ -190,47 +190,85 @@ export async function research(
 ): Promise<ResearchResult> {
   const book = new CitationBook();
 
+  // Trace helper: routes to the emitter's span when present, otherwise runs the body
+  // untraced. Domain spans (plan, angle, search, gather, synthesize) auto-nest under the
+  // agent's root span via the SDK's context propagation, turning this loop's strategy
+  // into a legible tree for any observer.
+  const noopSpan: ResearchSpan = { attr: () => undefined, event: () => undefined };
+  const span = <T>(
+    opts: { name: string; kind?: string; attributes?: Record<string, string | number | boolean> },
+    fn: (s: ResearchSpan) => Promise<T>,
+  ): Promise<T> => (deps.emit.span ? deps.emit.span(opts, fn) : fn(noopSpan));
+
   deps.emit.progress(5, "Planning research angles…");
-  const angles = await planAngles(topic, config, deps);
+  const angles = await span({ name: "plan", kind: "plan" }, async (s) => {
+    const planned = await planAngles(topic, config, deps);
+    s.attr("angles.count", planned.length);
+    s.event("angles", Object.fromEntries(planned.map((a, i) => [`${i + 1}`, a.question])));
+    return planned;
+  });
   deps.emit.progress(12, `Investigating ${angles.length} angle(s)`);
 
   const findings: AngleFindings[] = [];
   for (let ai = 0; ai < angles.length; ai++) {
     throwIfAborted(deps.signal);
     const question = angles[ai].question;
-    const notes: Note[] = [];
-    const seen = new Set<string>();
-    let query = question;
+    await span(
+      { name: `angle: ${question}`, kind: "step", attributes: { "angle.index": ai + 1, "angle.question": question } },
+      async (angleSpan) => {
+        const notes: Note[] = [];
+        const seen = new Set<string>();
+        let query = question;
 
-    for (let it = 0; it < config.maxIterationsPerAngle; it++) {
-      throwIfAborted(deps.signal);
-      const base = 12 + Math.round((ai / angles.length) * 60);
-      deps.emit.progress(base, `Angle ${ai + 1}/${angles.length}: searching…`);
+        for (let it = 0; it < config.maxIterationsPerAngle; it++) {
+          throwIfAborted(deps.signal);
+          const base = 12 + Math.round((ai / angles.length) * 60);
+          deps.emit.progress(base, `Angle ${ai + 1}/${angles.length}: searching…`);
 
-      const results = await deps.search.search({
-        query,
-        maxResults: config.maxSourcesPerAngle,
-        includeDomains: config.includeDomains,
-        signal: deps.signal,
-      });
-      const fresh = results.filter((r) => !seen.has(r.url));
-      if (fresh.length === 0) break; // novelty exhausted / weak query → stop this angle
+          const fresh = await span(
+            { name: "search", kind: "tool", attributes: { query, "search.maxResults": config.maxSourcesPerAngle } },
+            async (searchSpan) => {
+              const results = await deps.search.search({
+                query,
+                maxResults: config.maxSourcesPerAngle,
+                includeDomains: config.includeDomains,
+                signal: deps.signal,
+              });
+              const novel = results.filter((r) => !seen.has(r.url));
+              searchSpan.attr("results.count", results.length);
+              searchSpan.attr("results.novel", novel.length);
+              return novel;
+            },
+          );
+          if (fresh.length === 0) break; // novelty exhausted / weak query → stop this angle
 
-      const withCites = fresh.map((r) => {
-        seen.add(r.url);
-        return { citation: book.ref(r.url, r.title), title: r.title, content: r.content };
-      });
+          const withCites = fresh.map((r) => {
+            seen.add(r.url);
+            return { citation: book.ref(r.url, r.title), title: r.title, content: r.content };
+          });
 
-      const outcome = await gather(question, notes.length, withCites, deps);
-      notes.push(...outcome.notes);
+          const outcome = await span(
+            { name: "gather", kind: "llm", attributes: { "sources.new": withCites.length } },
+            async (gatherSpan) => {
+              const result = await gather(question, notes.length, withCites, deps);
+              gatherSpan.attr("claims.extracted", result.notes.length);
+              gatherSpan.attr("sufficient", result.sufficient);
+              return result;
+            },
+          );
+          notes.push(...outcome.notes);
 
-      if (outcome.sufficient || seen.size >= config.minSourcesForCoverage) break;
-      const next = outcome.nextQuery.trim();
-      if (next && next !== query) query = next; // reformulate and iterate
-      else break; // no new direction → stop
-    }
+          if (outcome.sufficient || seen.size >= config.minSourcesForCoverage) break;
+          const next = outcome.nextQuery.trim();
+          if (next && next !== query) query = next; // reformulate and iterate
+          else break; // no new direction → stop
+        }
 
-    findings.push({ question, notes, sourceCount: seen.size });
+        angleSpan.attr("sources.count", seen.size);
+        angleSpan.attr("claims.count", notes.length);
+        findings.push({ question, notes, sourceCount: seen.size });
+      },
+    );
   }
 
   // Section-aware synthesis: write + stream one section per angle, then the sources.
@@ -245,7 +283,10 @@ export async function research(
   const single = findings.length === 1;
   for (const f of findings) {
     throwIfAborted(deps.signal);
-    const section = await writeSection(topic, f, deps);
+    const section = await span(
+      { name: `synthesize: ${f.question}`, kind: "llm", attributes: { "claims.count": f.notes.length } },
+      () => writeSection(topic, f, deps),
+    );
     // With a single angle the per-angle heading just restates the title, so omit it.
     const block = single ? `${section}\n\n` : `## ${f.question}\n\n${section}\n\n`;
     report += block;

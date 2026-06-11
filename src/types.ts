@@ -48,7 +48,20 @@ export interface ResearchResult {
 }
 
 /** Side-channel for streamed progress + incremental report text. */
+/** A minimal observability span surface, a structural subset of the SDK's SpanHandle.
+ *  Declared locally so the research loop need not import the SDK to be traced. */
+export interface ResearchSpan {
+  attr(key: string, value: string | number | boolean): unknown;
+  event(name: string, attributes?: Record<string, string | number | boolean>): unknown;
+}
+
 export interface ResearchEmitter {
   progress(percent: number, message: string): void;
   delta(text: string): void;
+  /** Open a domain span around a unit of work (plan, search, synthesis). Optional: when
+   *  absent — e.g. in offline unit tests — the loop runs identically with no tracing. */
+  span?<T>(
+    opts: { name: string; kind?: string; attributes?: Record<string, string | number | boolean> },
+    fn: (span: ResearchSpan) => Promise<T>,
+  ): Promise<T>;
 }
