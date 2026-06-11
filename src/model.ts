@@ -94,39 +94,64 @@ export function openAIModel(opts: OpenAIModelOptions): ModelClient {
   return {
     id: `openai:${opts.model}`,
     async chat(messages, o = {}) {
-      return call({ model: opts.model, messages, temperature: o.temperature ?? 0.3 }, o.signal);
+      // stream:false: we await the whole completion (the loop emits it itself), and some
+      // gateways' SSE is unreliable for certain models (emits only [DONE], no content).
+      return call({ model: opts.model, messages, temperature: o.temperature ?? 0.3, stream: false }, o.signal);
     },
     async json<T>(messages: ChatMessage[], schema: object, o: ChatOptions & { schemaName?: string } = {}) {
-      const body = {
-        model: opts.model,
-        messages,
-        temperature: o.temperature ?? 0,
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: o.schemaName ?? "result", schema, strict: true },
-        },
-      };
-      const first = await call(body, o.signal);
-      try {
-        return parseJsonLoose<T>(first);
-      } catch {
-        // Some gateways/models ignore `json_schema` for open-ended, list-style prompts
-        // and answer in prose (e.g. a markdown numbered list). Retry once with a
-        // forceful, prompt-level JSON-only instruction and the schema inline — which
-        // these models honor reliably — instead of collapsing to a degraded fallback.
-        const reformat: ChatMessage[] = [
-          ...messages,
+      // The parsed result must contain the schema's top-level required keys. Some
+      // gateways accept `json_schema` but ignore the property names (e.g. returning
+      // `{topic, sub_questions}` instead of `{angles:[...]}`) — valid JSON, wrong shape.
+      const required: string[] = Array.isArray((schema as { required?: unknown }).required)
+        ? ((schema as { required: string[] }).required)
+        : [];
+      const shapeOk = (v: unknown): boolean =>
+        required.length === 0 ||
+        (typeof v === "object" && v !== null && required.every((k) => k in (v as Record<string, unknown>)));
+      const reformat = (): Promise<string> =>
+        call(
           {
-            role: "user",
-            content:
-              "Output ONLY a single JSON object that conforms exactly to this JSON Schema. " +
-              "No prose, no markdown, no code fences, no numbering.\n\nJSON Schema:\n" +
-              JSON.stringify(schema),
+            model: opts.model,
+            stream: false,
+            temperature: 0,
+            messages: [
+              ...messages,
+              {
+                role: "user",
+                content:
+                  "Output ONLY a single JSON object that conforms exactly to this JSON Schema. " +
+                  "Use exactly these property names. No prose, no markdown, no code fences.\n\nJSON Schema:\n" +
+                  JSON.stringify(schema),
+              },
+            ],
           },
-        ];
-        const second = await call({ model: opts.model, messages: reformat, temperature: 0 }, o.signal);
-        return parseJsonLoose<T>(second);
+          o.signal,
+        );
+      try {
+        // Preferred path: native structured output via `json_schema` (honored by e.g.
+        // OpenAI / Gemini). Accept it only if it parses AND has the required shape.
+        const parsed = parseJsonLoose<T>(
+          await call(
+            {
+              model: opts.model,
+              messages,
+              stream: false,
+              temperature: o.temperature ?? 0,
+              response_format: {
+                type: "json_schema",
+                json_schema: { name: o.schemaName ?? "result", schema, strict: true },
+              },
+            },
+            o.signal,
+          ),
+        );
+        if (shapeOk(parsed)) return parsed;
+      } catch {
+        // HTTP error (gateway rejects response_format) or unparseable prose — fall through.
       }
+      // Cross-gateway fallback: no `response_format`, a forceful JSON-only instruction,
+      // and the schema inline. Recovers the correct result instead of a degraded one.
+      return parseJsonLoose<T>(await reformat());
     },
   };
 }

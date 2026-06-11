@@ -24,13 +24,16 @@ First release: a configurable, spec-compliant research worker (SDK-only).
 - Exports of the loop, model client, and search ports for embedding and testing.
 
 ### Fixed
-- **Planner no longer collapses to a single angle on gateways that ignore
-  `json_schema`.** Some OpenAI-compatible gateways (e.g. Gemini via LiteLLM) answer
-  open-ended, list-style prompts in prose despite a strict `json_schema` response
-  format, which made the structured `json()` call unparseable and silently fell back
-  to one angle (the topic restated). `json()` now does a one-shot **reformat retry**
-  with a forceful JSON-only instruction and the schema inline, recovering the full
-  set of angles. Verified live against `gemini-3.1-flash-lite` / `gemini-3-flash`.
+- **Planner no longer collapses to a single angle, across model gateways.** The
+  structured `json()` call could fail or degrade on gateways that don't honor
+  `response_format: json_schema` — some answer list-style prompts in prose (Gemini via
+  LiteLLM), and some reject the request, return valid JSON with *different* property
+  names, or stream empty content (Claude via LiteLLM). Any of these made planning fall
+  back to one angle (the topic restated) and could empty the report. `json()` now
+  requests `stream:false`, validates the parsed result against the schema's required
+  keys, and on any failure (HTTP error, prose, or wrong shape) retries once without
+  `response_format` using a forceful JSON-only prompt with the schema inline. Verified
+  live against `gh/claude-opus-4.6` and `gemini-3.x`.
 
 ### Known limitations
 - Angles are investigated **sequentially**; parallel fan-out is future work.
